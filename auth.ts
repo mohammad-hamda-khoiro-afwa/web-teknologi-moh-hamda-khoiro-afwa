@@ -15,6 +15,8 @@ type User = {
 
 async function getUser(email: string): Promise<User | undefined> {
   try {
+    const dbInfo = await sql`SELECT current_database(), current_user`;
+    console.log('[AUTH DB INFO] Database terhubung:', dbInfo.rows[0]);
     const user = await sql<User>`SELECT * FROM users WHERE email=${email}`;
     return user.rows[0];
   } catch (error) {
@@ -23,7 +25,7 @@ async function getUser(email: string): Promise<User | undefined> {
   }
 }
 
-export const { auth, signIn, signOut } = NextAuth({
+export const { handlers, auth, signIn, signOut } = NextAuth({
   ...authConfig,
   secret: process.env.AUTH_SECRET,
   providers: [
@@ -36,11 +38,33 @@ export const { auth, signIn, signOut } = NextAuth({
         if (parsedCredentials.success) {
           const { email, password } = parsedCredentials.data;
           const user = await getUser(email);
-          if (!user) return null;
+          if (!user) {
+            console.log(`[AUTH] User dengan email "${email}" tidak ditemukan di tabel users.`);
+            return null;
+          }
           
-          // 2. Gunakan user.password_hash untuk dicocokkan dengan input password
-          const passwordsMatch = await bcrypt.compare(password, user.password_hash);
-          if (passwordsMatch) return user;
+          const userPassword = user.password_hash || (user as any).password;
+          if (!userPassword) {
+            console.log(`[AUTH] Nilai password/password_hash kosong di database untuk email "${email}".`);
+            return null;
+          }
+
+          let passwordsMatch = false;
+          if (typeof userPassword === 'string' && userPassword.startsWith('$2')) {
+            passwordsMatch = await bcrypt.compare(password, userPassword);
+          } else {
+            // Fallback jika di database tersimpan password plain text (belum di-hash bcrypt)
+            passwordsMatch = password === userPassword;
+          }
+
+          if (passwordsMatch) {
+            console.log(`[AUTH] Login berhasil untuk: ${email}`);
+            return user;
+          }
+
+          console.log(`[AUTH] Password salah untuk email "${email}".`);
+        } else {
+          console.log('[AUTH] Validasi input gagal: pastikan format email benar dan password minimal 6 karakter.');
         }
 
         return null;
